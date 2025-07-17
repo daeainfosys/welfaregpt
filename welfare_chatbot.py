@@ -1,5 +1,3 @@
-# 복지 정책 LLM 챗봇 - streamlit_chatbox 기반
-
 import streamlit as st
 from streamlit_chatbox import *
 import time
@@ -15,7 +13,9 @@ import torch
 from langchain.schema import Document
 from typing import List
 import unicodedata
-
+import os
+import streamlit as st
+    
 # 이모지 및 특수문자 제거 함수
 def remove_emojis_and_enclosed_chars(text):
     """텍스트에서 이모지와 특수문자를 제거합니다."""
@@ -97,7 +97,7 @@ def create_vectorstore(texts, embedding_model):
 @st.cache_resource
 def load_llm_model():
     """LLM 모델을 로드하여 반환합니다."""
-    model_name = "MLP-KTLim/llama-3-Korean-Bllossom-8B"
+    model_name = "kakaocorp/kanana-1.5-8b-instruct-2505"
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     llm_pipeline = pipeline(
         "text-generation",
@@ -115,7 +115,7 @@ def load_llm_model():
     return llm
 
 # 공통 문서 처리 함수
-def _process_query(question, age=None, gender=None, location=None, income=None, family_size=None, marriage=None, children=None, children_ages=None, basic_living=None, employment_status=None, pregnancy_status=None, nationality=None, disability=None, military_service=None):    
+def _process_query(question, age=None, gender=None, location=None, income=None, family_size=None, marriage=None, children=None, basic_living=None, employment_status=None, pregnancy_status=None, nationality=None, disability=None, military_service=None):    
     """질문을 처리하고 프롬프트와 출처를 생성합니다."""
     if st.session_state.get("db") is None:
         return None, "PDF 파일을 먼저 업로드해주세요.", []
@@ -174,7 +174,7 @@ def _process_query(question, age=None, gender=None, location=None, income=None, 
 
     context = "\n\n".join(context_parts)
 
-    # 프롬프트 생성
+    # 프롬프트 생성 (1줄씩만 띄우기)
     user_info = []
     if age is not None:
         user_info.append(f"나이: {age}")
@@ -189,25 +189,17 @@ def _process_query(question, age=None, gender=None, location=None, income=None, 
     if marriage is not None:
         user_info.append(f"결혼 유무: {marriage}")
     if children is not None:
-        user_info.append(f"자녀 수: {children}명")        
-    if children_ages is not None:
-        # 자녀가 여러 명일 경우, 각 자녀의 나이를 쉼표로 구분하여 문자열로 만듭니다.
-        if isinstance(children_ages, list) and len(children_ages) > 1:
-            ages_str = ", ".join(str(age) for age in children_ages)
-            user_info.append(f"자녀 나이: {ages_str}")
-        else:
-            user_info.append(f"자녀 나이: {children_ages}")
+        user_info.append(f"자녀 수: {children}명")
     if basic_living is not None:
         user_info.append(f"기초생활수급 여부: {basic_living}")
     if employment_status is not None:
         user_info.append(f"취업 여부: {employment_status}")
-    
-        
+
     user_info_str = "\n".join(user_info)
 
     prompt = f"""한국 복지정책 전문가로서 사용자 정보와 중요 지침과 주어진 검색 결과를 바탕으로 질문에 대해 복지 정책들을 정확하고 이해하기 쉽게 답변해주세요.
 
-사용자: 
+사용자 정보:
 {user_info_str if user_info_str else "정보 없음"}
 
 질문: 
@@ -263,14 +255,13 @@ def _extract_answer_only(response):
     if answer_lines:
         return '\n'.join(answer_lines)
     
-    # 그래도 찾지 못하면 원본 반환
     return response
 
 # 일반 모드 답변 생성 함수
-def generate_answer(question, age=None, gender=None, location=None, income=None, family_size=None, marriage=None, children=None, children_ages=None, basic_living=None, employment_status=None, pregnancy_status=None, nationality=None, disability=None, military_service=None):
+def generate_answer(question, age=None, gender=None, location=None, income=None, family_size=None, marriage=None, children=None, basic_living=None, employment_status=None, pregnancy_status=None, nationality=None, disability=None, military_service=None):
     """질문에 대한 답변을 생성합니다 (일반 모드)."""
     try:
-        prompt, error_msg, sources, search_results = _process_query(question, age, gender, location, income, family_size, marriage, children, children_ages, basic_living, employment_status, pregnancy_status, nationality, disability, military_service)
+        prompt, error_msg, sources, search_results = _process_query(question, age, gender, location, income, family_size, marriage, children, basic_living, employment_status, pregnancy_status, nationality, disability, military_service)
         
         if error_msg:
             return error_msg, [], []
@@ -283,7 +274,7 @@ def generate_answer(question, age=None, gender=None, location=None, income=None,
             
             # 답변에서 프롬프트 제거
             clean_response = _extract_answer_only(response)
-            clean_response = remove_emojis_and_enclosed_chars(clean_response)
+            # clean_response = remove_emojis_and_enclosed_chars(clean_response)
             return clean_response, sources, search_results
             
         except Exception as e:
@@ -293,10 +284,10 @@ def generate_answer(question, age=None, gender=None, location=None, income=None,
         return f"답변 생성 중 예상치 못한 오류가 발생했습니다: {str(e)}", [], []
 
 # 스트리밍 모드 답변 생성 함수
-def generate_answer_streaming(question, age=None, gender=None, location=None, income=None):
+def generate_answer_streaming(question, age=None, gender=None, location=None, income=None, family_size=None, marriage=None, children=None, basic_living=None, employment_status=None, pregnancy_status=None, nationality=None, disability=None, military_service=None):
     """질문에 대한 답변을 생성합니다 (스트리밍 모드)."""
     try:
-        prompt, error_msg, sources, search_results = _process_query(question, age, gender, location, income)
+        prompt, error_msg, sources, search_results = _process_query(question, age, gender, location, income, family_size, marriage, children, basic_living, employment_status, pregnancy_status, nationality, disability, military_service)
         
         if error_msg:
             yield error_msg, [], []
@@ -351,6 +342,43 @@ def on_chat_change():
     st.session_state.chat_box.use_chat_name(st.session_state["chat_name"])
     st.session_state.chat_box.context_to_session()
 
+# 기본 문서 자동 로드 함수
+def load_default_documents():
+    """페이지 시작 시 기본 복지 문서를 자동으로 로드합니다."""
+    if st.session_state.get("default_documents_loaded", False):
+        return
+    
+    pdf_dir = "./pdf/welfare"
+    
+    if os.path.exists(pdf_dir):
+        pdf_files = [os.path.join(pdf_dir, f) for f in os.listdir(pdf_dir) if f.lower().endswith(".pdf")]
+        
+        if pdf_files:
+            try:
+                with st.spinner("기본 복지 문서를 로드하고 있습니다..."):
+                    # 문서 로드 및 처리
+                    texts = load_and_process_documents(pdf_files)
+                    
+                    if texts:
+                        # 임베딩 모델 로드
+                        if "embedding_model" not in st.session_state:
+                            st.session_state.embedding_model = load_embedding_model()
+                        
+                        # 벡터스토어 생성
+                        db = create_vectorstore(texts, st.session_state.embedding_model)
+                        st.session_state.db = db
+                        
+                        # LLM 모델 로드
+                        if "llm" not in st.session_state:
+                            st.session_state.llm = load_llm_model()
+                        
+                        st.session_state.default_documents_loaded = True
+                        st.session_state.documents_loaded = True
+                        st.success(f"✅ 기본 복지 문서 {len(texts)}개 청크가 로드되었습니다!")
+                        
+            except Exception as e:
+                st.error(f"기본 문서 로드 중 오류 발생: {str(e)}")
+
 # 메인 앱
 def main():
     st.set_page_config(
@@ -369,6 +397,9 @@ def main():
         st.session_state.chat_box.use_chat_name("welfare_chat")
     
     chat_box = st.session_state.chat_box
+    
+    # 기본 문서 자동 로드
+    load_default_documents()
     
     # 사이드바 구성
     with st.sidebar:        
@@ -408,11 +439,11 @@ def main():
         disability = st.radio("장애 유무", options=["없음", "있음"], index=0)
         
         # 병역 유무 입력
-        military_service = ["해당 없음", "복무 완료", "복무 중", "미필"]
+        military_service = ["군필", "복무 중", "미필"]
         military_service = st.selectbox("병역 유무", options=military_service, index=0)
         
         # 취업 여부 (실직자/구직자/재직자)
-        employment_status = ["실직자", "구직자", "재직자"]
+        employment_status = ["재직자", "구직자", "실직자"]
         employment_status = st.selectbox("취업 여부", options=employment_status, index=0)
         
         # 임신/출산 상태 (임산부, 출산 후 6개월 이내, 해당 없음)
@@ -423,21 +454,6 @@ def main():
         children_options = ["0명", "1명", "2명", "3명", "4명", "5명", "6명", "7명", "8명", "9명", "10명"]
         children = st.selectbox("자녀 수", options=children_options, index=0)
 
-        # 자녀 나이 입력: 자녀 수가 1명 이상일 때만 입력 필드 활성화
-        children_ages = []
-        if children != "0명":
-            # 자녀 수에서 숫자만 추출
-            num_children = int(children.replace("명", ""))
-            age_options = ["0세", "1세", "2세", "3세", "4세", "5세", "6세", "7세", "8세", "9세", "10세", "11세", "12세", "13세", "14세", "15세", "16세", "17세", "18세"]
-            st.markdown("자녀별 나이를 선택하세요.")
-            for i in range(num_children):
-                age = st.selectbox(
-                    f"자녀 {i+1} 나이", 
-                    options=age_options, 
-                    index=0, 
-                    key=f"children_age_{i}"
-                )
-                children_ages.append(age)
         # 거주지
         locations = ["서울", "수원", "부산", "대구", "인천", "광주", "대전", "울산", "세종", 
                     "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주"]
@@ -451,53 +467,66 @@ def main():
         
         st.divider()
         
-        # PDF 업로드
-        st.subheader("PDF 문서 업로드")
+        # 문서 상태 표시
+        st.subheader("문서 상태")
+        
+        pdf_dir = "./pdf/welfare"
+        
+        # 기본 문서 상태 표시
+        if st.session_state.get("default_documents_loaded", False):
+            if os.path.exists(pdf_dir):
+                default_files = [f for f in os.listdir(pdf_dir) if f.lower().endswith(".pdf")]
+                st.success(f"✅ 기본 복지 정책 문서 {len(default_files)}개 파일이 로드되었습니다.")
+                with st.expander("기본 문서 목록 보기"):
+                    for file in default_files:
+                        st.write(f"📄 {file}")
+            else:
+                st.warning("⚠️ 기본 복지 정책 문서를 로드할 수 없습니다.")
+        else:
+            if os.path.exists(pdf_dir) and len([f for f in os.listdir(pdf_dir) if f.lower().endswith(".pdf")]) > 0:
+                st.info("⏳ 기본 복지 정책 문서를 로드 중입니다...")
+            else:
+                st.warning("⚠️ pdf/welfare 폴더에 기본 복지 정책 문서가 없습니다.")
+        
+        # 추가 문서 업로드 섹션
+        st.subheader("추가 문서 업로드")
+        
         uploaded_files = st.file_uploader(
-            "복지 정책 PDF 파일들을 업로드하세요 (입력하지 않으면 시스템 기준 최신 문서로 업로드됩니다)",
+            "추가 복지 정책 PDF 파일들을 업로드하세요 (선택사항)",
             type=["pdf"],
-            accept_multiple_files=True
+            accept_multiple_files=True,
+            help="기본 문서에 추가로 더 많은 정책 문서를 업로드할 수 있습니다."
         )
         
-        import os  # os 모듈을 사용하여 디렉토리 내 파일을 탐색합니다.
-
-        # 문서 로드/업데이트 버튼 클릭 시 동작
-        if st.button("문서 로드/업데이트"):
-            with st.spinner("문서를 처리하고 있습니다..."):
+        # 추가 문서 로드 버튼
+        if st.button("추가 문서 로드", type="secondary"):
+            with st.spinner("추가 문서를 처리하고 있습니다..."):
                 try:
-                    file_paths = []
-
-                    # 업로드된 파일이 있으면 저장
-                    if uploaded_files:
-                        for uploaded_file in uploaded_files:
-                            with open(uploaded_file.name, "wb") as f:
-                                f.write(uploaded_file.getvalue())
-                            file_paths.append(uploaded_file.name)
-                    else:
-                        # 업로드된 파일이 없으면 ./pdf 폴더 내 모든 PDF 파일을 불러옴
-                        pdf_dir = "./pdf/welfare"
-                        if not os.path.exists(pdf_dir):
-                            st.error("pdf 폴더가 존재하지 않습니다. 먼저 pdf 폴더를 생성하거나 파일을 업로드하세요.")
-                            return
+                    # 업로드된 파일 저장
+                    additional_files = []
+                    for uploaded_file in uploaded_files:
+                        with open(uploaded_file.name, "wb") as f:
+                            f.write(uploaded_file.getvalue())
+                        additional_files.append(uploaded_file.name)
+                    
+                    # 기본 문서와 추가 문서 합치기
+                    all_files = []
+                    
+                    # 기본 문서 추가
+                    if os.path.exists(pdf_dir):
                         pdf_files = [os.path.join(pdf_dir, f) for f in os.listdir(pdf_dir) if f.lower().endswith(".pdf")]
-                        if not pdf_files:
-                            st.error("pdf 폴더에 PDF 파일이 없습니다. 파일을 업로드하거나 폴더에 PDF를 넣어주세요.")
-                            return
-                        file_paths = pdf_files
+                        all_files.extend(pdf_files)
+                    
+                    # 추가 문서 추가
+                    all_files.extend(additional_files)
+                    
+                    st.info(f"기본 문서 포함 총 {len(all_files)}개 파일을 처리합니다...")
 
                     # 문서 로드 및 처리
-                    texts = load_and_process_documents(file_paths)
+                    texts = load_and_process_documents(all_files)
                     
                     if texts:
-                        # 임베딩 모델 로드
-                        if "embedding_model" not in st.session_state:
-                            try:
-                                st.session_state.embedding_model = load_embedding_model()
-                            except Exception as e:
-                                st.error(f"임베딩 모델 로드 실패: {str(e)}")
-                                return
-                        
-                        # 벡터스토어 생성
+                        # 벡터스토어 재생성
                         try:
                             db = create_vectorstore(texts, st.session_state.embedding_model)
                             st.session_state.db = db
@@ -505,27 +534,13 @@ def main():
                             st.error(f"벡터스토어 생성 실패: {str(e)}")
                             return
                         
-                        # LLM 모델 로드
-                        if "llm" not in st.session_state:
-                            try:
-                                st.session_state.llm = load_llm_model()
-                            except Exception as e:
-                                st.error(f"LLM 모델 로드 실패: {str(e)}")
-                                return
-                        
-                        st.success(f"✅ {len(texts)}개 문서 청크가 성공적으로 로드되었습니다!")
+                        st.success(f"✅ 추가 문서 포함 총 {len(texts)}개 문서 청크가 성공적으로 로드되었습니다!")
                         st.session_state.documents_loaded = True
                     else:
-                        st.error("문서 로드에 실패했습니다.")
+                        st.error("추가 문서 로드에 실패했습니다.")
                         
                 except Exception as e:
-                    st.error(f"문서 처리 중 오류 발생: {str(e)}")
-        
-        # 상태 표시
-        if st.session_state.get("documents_loaded", False):
-            st.success("✅ 문서 로드 완료")
-        else:
-            st.warning("⚠️ PDF 문서를 업로드하거나 pdf 폴더에 파일을 넣어주세요(선택)")
+                    st.error(f"추가 문서 처리 중 오류 발생: {str(e)}")
         
         st.divider()
         
@@ -540,7 +555,7 @@ def main():
     # 멋진 첫 화면 문구와 폰트 크기 조정
     st.markdown(
         """
-        <h1 style='text-align: center; font-size: 3.2em;'>🏛️ 복지PT에 오신 것을 환영합니다!</h1>
+        <h1 style='text-align: center; font-size: 3.2em;'>복지PT에 오신 것을 환영합니다!</h1>
         <p style='text-align: center; font-size: 1.5em; color: #555;'>
             당신의 상황에 꼭 맞는 복지 정책을 <b>AI</b>가 쉽고 빠르게 찾아드립니다.<br>
             궁금한 점을 자유롭게 입력해보세요!
@@ -548,6 +563,20 @@ def main():
         """,
         unsafe_allow_html=True
     )
+    
+    # 사용 팁 표시
+    if not st.session_state.get("chat_started", False):
+        st.info("""
+        💡 **사용 팁**
+        - 왼쪽 사이드바에서 개인정보를 입력하면 더 정확한 답변을 받을 수 있습니다
+        - 예시: "30대 신혼부부를 위한 주거 지원 정책을 알려주세요"
+        - 채팅 후 아래 사용설명서를 확인해보세요!
+        - 추가적인 문서를 업로드하면 더 정확한 답변을 받을 수 있습니다 (선택사항)
+        """)
+    
+    # 채팅이 시작되었는지 확인
+    if len(st.session_state.chat_box.history) > 0:
+        st.session_state.chat_started = True
     
     # 채팅 박스 초기화 및 출력
     chat_box.init_session()
@@ -561,8 +590,9 @@ def main():
     
     # 채팅 입력 처리
     if query := st.chat_input('나에게 알맞는 복지 혜택 알려주세요.'):
-        if not st.session_state.get("documents_loaded", False):
-            st.error("먼저 PDF 문서를 업로드해주세요!")
+        # 기본 문서가 로드되었는지 확인
+        if not st.session_state.get("default_documents_loaded", False):
+            st.error("⏳ 기본 복지 정책 문서를 로드 중입니다. 잠시만 기다려주세요!")
             return
         
 
@@ -588,7 +618,6 @@ def main():
                     family_size=family_size,
                     marriage=marriage,
                     children=children,
-                    children_ages=children_ages,
                     employment_status=employment_status,
                     pregnancy_status=pregnancy_status,
                     nationality=nationality,
@@ -656,7 +685,6 @@ def main():
                         basic_living=basic_living,
                         marriage=marriage,
                         children=children,
-                        children_ages=children_ages,
                         employment_status=employment_status,
                         pregnancy_status=pregnancy_status,
                         nationality=nationality,
