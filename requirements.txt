@@ -8,3 +8,7 @@ numpy
 openai
 pandas
 PyMuPDF
+streamlit_chatbox
+transformers
+simplejson
+torch
