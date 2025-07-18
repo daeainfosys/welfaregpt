@@ -1,5 +1,5 @@
 pip==25.1
-accelerate @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_accelerate_1751323734/work
+accelerate
 aiofiles @ file:///home/conda/feedstock_root/build_artifacts/aiofiles_1733829030387/work
 aiohappyeyeballs @ file:///croot/aiohappyeyeballs_1734469393482/work
 aiohttp @ file:///croot/aiohttp_1734687138658/work
