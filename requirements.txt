@@ -12,3 +12,4 @@ streamlit_chatbox
 transformers
 simplejson
 torch
+sentence-transformers
