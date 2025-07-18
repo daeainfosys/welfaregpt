@@ -15,6 +15,10 @@ from typing import List
 import unicodedata
 import os
 import streamlit as st
+import uuid
+from langchain.storage import InMemoryStore
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain.retrievers.multi_vector import MultiVectorRetriever
     
 # 이모지 및 특수문자 제거 함수
 def remove_emojis_and_enclosed_chars(text):
@@ -45,9 +49,17 @@ def process_pages(pages: List[Document]) -> List[Document]:
     """각 문서를 전처리하여 반환합니다."""
     return [Document(page_content=preprocess_document(page.page_content), metadata=page.metadata) for page in pages]
 
+# 배치 처리 함수 (첫 번째 코드에서 추가)
+def add_documents_in_batches(vectorstore, documents, batch_size=1000):
+    """문서들을 배치 단위로 나누어 벡터 저장소에 추가"""
+    for i in range(0, len(documents), batch_size):
+        batch = documents[i:i + batch_size]
+        vectorstore.add_documents(batch)
+        print(f"배치 {i//batch_size + 1}: {len(batch)}개 문서 추가 완료")
+
 # 문서 로드 및 전처리 함수
-def load_and_process_documents(file_paths: List[str]):
-    """여러 PDF 문서를 로드하고 전처리하여 반환합니다."""
+def load_and_process_documents(file_paths: List[str], embedding_model):
+    """여러 PDF 문서를 로드하고 MultiVectorRetriever 방식으로 처리합니다."""
     all_documents = []
     
     for file_path in file_paths:
@@ -60,32 +72,86 @@ def load_and_process_documents(file_paths: List[str]):
             continue
     
     if not all_documents:
-        return []
+        return None, None, None
     
+    # 문서 전처리
     processed_data = process_pages(all_documents)
     
-    # 문서를 텍스트 청크로 분할
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
-        length_function=len,
-        separators=["\n\n", "\n", "。", ".", "!", "?", ";", ":", " "]
+    # 벡터 저장소 생성
+    vectorstore = Chroma(
+        collection_name="welfare_chunks",
+        embedding_function=embedding_model,
     )
-    texts = text_splitter.split_documents(processed_data)
-    return texts
+    
+    # 부모 문서의 저장소 계층
+    store = InMemoryStore()
+    id_key = "doc_id"
+    
+    # 검색기 생성
+    retriever = MultiVectorRetriever(
+        vectorstore=vectorstore,
+        byte_store=store,
+        id_key=id_key,
+        search_type="similarity_score_threshold",
+        search_kwargs={"score_threshold": 0.5}
+    )
+    
+    # Parent/Child 문서 분할
+    parent_text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+    )
+    child_text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=300,
+    )
+    
+    # 각 원본 문서를 parent로 처리
+    parent_docs = []
+    child_docs = []
+    
+    for doc in processed_data:
+        # 각 문서를 parent 청크로 분할
+        parent_chunks = parent_text_splitter.split_documents([doc])
+        
+        for parent_chunk in parent_chunks:
+            # Parent 문서에 고유 ID 부여
+            parent_id = str(uuid.uuid4())
+            parent_chunk.metadata[id_key] = parent_id
+            parent_docs.append(parent_chunk)
+            
+            # Parent 청크를 child로 분할
+            child_chunks = child_text_splitter.split_documents([parent_chunk])
+            
+            # 각 child 문서에 parent ID 연결
+            for child_chunk in child_chunks:
+                child_chunk.metadata[id_key] = parent_id
+            
+            child_docs.extend(child_chunks)
+    
+    # 배치 처리로 child 문서만 벡터스토어에 추가
+    st.info(f"Parent 문서 수: {len(parent_docs)}, Child 문서 수: {len(child_docs)}")
+    
+    print(f"\nChild 문서들을 배치 단위로 벡터스토어에 추가 중...")
+    add_documents_in_batches(retriever.vectorstore, child_docs, batch_size=1000)
+    
+    # Parent 문서를 docstore에 저장
+    parent_doc_ids = [doc.metadata[id_key] for doc in parent_docs]
+    retriever.docstore.mset(list(zip(parent_doc_ids, parent_docs)))
+    print("Parent 문서 저장 완료")
+    
+    return retriever, len(child_docs), parent_docs
 
 # 임베딩 모델 로드 캐시 함수
 @st.cache_resource
 def load_embedding_model():
     """임베딩 모델을 로드하여 반환합니다."""
     embedding_model = HuggingFaceEmbeddings(
-        model_name='jhgan/ko-sroberta-nli',
+        model_name='jhgan/ko-sroberta-multitask',
         model_kwargs={'device': 'cuda'},
         encode_kwargs={'normalize_embeddings': True},
     )
     return embedding_model
 
-# 벡터스토어 생성 함수
+# 벡터스토어 생성 함수 (더 이상 사용하지 않음 - MultiVectorRetriever로 대체)
 def create_vectorstore(texts, embedding_model):
     """텍스트 청크와 임베딩 모델을 사용하여 벡터스토어를 생성합니다."""
     if not texts:
@@ -93,21 +159,20 @@ def create_vectorstore(texts, embedding_model):
     db = Chroma.from_documents(texts, embedding=embedding_model)
     return db
 
-# LLM 모델 로드 캐시 함수
+# LLM 모델 로드 캐시 함수 
 @st.cache_resource
 def load_llm_model():
     """LLM 모델을 로드하여 반환합니다."""
-    model_name = "kakaocorp/kanana-1.5-8b-instruct-2505"
+    model_name = "MLP-KTLim/llama-3-Korean-Bllossom-8B"
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     llm_pipeline = pipeline(
         "text-generation",
         model=model_name,
         model_kwargs={"torch_dtype": torch.bfloat16},
         device_map="auto",
-        max_new_tokens=512,
-        early_stopping=True,
-        temperature=0.5,
-        do_sample=True,
+        max_new_tokens=768,
+        temperature=0,
+        do_sample=False,
         pad_token_id=tokenizer.eos_token_id,
         repetition_penalty=1.1,
     )
@@ -117,20 +182,22 @@ def load_llm_model():
 # 공통 문서 처리 함수
 def _process_query(question, age=None, gender=None, location=None, income=None, family_size=None, marriage=None, children=None, basic_living=None, employment_status=None, pregnancy_status=None, nationality=None, disability=None, military_service=None):    
     """질문을 처리하고 프롬프트와 출처를 생성합니다."""
-    if st.session_state.get("db") is None:
-        return None, "PDF 파일을 먼저 업로드해주세요.", []
+    if st.session_state.get("retriever") is None:
+        return None, "PDF 파일을 먼저 업로드해주세요.", [], []
     
     # clean_text 함수 정의
     def clean_text(text):
         text = re.sub(r'<[^>]+>', '', text)
         return re.sub(r'\s+', ' ', text.strip())
 
-    # 벡터스토어에서 유사한 문서 검색
-    retriever = st.session_state.db.as_retriever(search_type="similarity", k=3)
-    docs = retriever.get_relevant_documents(question)
+    # MultiVectorRetriever 사용 (k=5개 검색)
+    try:
+        docs = st.session_state.retriever.invoke(question, k=5)
+    except Exception as e:
+        return None, f"문서 검색 중 오류 발생: {str(e)}", [], []
 
     if not docs:
-        return None, "관련 정보를 찾을 수 없습니다.", []
+        return None, "관련 정보를 찾을 수 없습니다. 다른 키워드나 표현으로 다시 질문해주세요.", [], []
 
     # 문서 품질 필터링
     quality_docs = []
@@ -140,7 +207,7 @@ def _process_query(question, age=None, gender=None, location=None, income=None, 
             quality_docs.append(doc)
 
     if not quality_docs:
-        return None, "검색된 문서의 품질이 낮아 답변을 생성할 수 없습니다.", []
+        return None, "검색된 문서의 품질이 낮아 답변을 생성할 수 없습니다. 더 구체적인 질문을 해주세요.", [], []
 
     # 참고자료와 출처 정리
     context_parts = []
@@ -149,7 +216,7 @@ def _process_query(question, age=None, gender=None, location=None, income=None, 
     
     for i, doc in enumerate(quality_docs[:3]):
         clean_content = clean_text(doc.page_content)
-        context_parts.append(f"[참고자료 {i+1}]\n{clean_content[:1024]}")
+        context_parts.append(f"[참고자료 {i+1}]\n{clean_content[:128]}")
         
         # 페이지 정보 추출
         page_num = doc.metadata.get('page', '알 수 없음')
@@ -174,46 +241,54 @@ def _process_query(question, age=None, gender=None, location=None, income=None, 
 
     context = "\n\n".join(context_parts)
 
-    # 프롬프트 생성 (1줄씩만 띄우기)
+    # 프롬프트 생성
     user_info = []
-    if age is not None:
+    # "해당 없음"이 아닌 경우에만 추가
+    if age is not None and str(age).strip() != "":
         user_info.append(f"나이: {age}")
     if gender is not None:
         user_info.append(f"성별: {gender}")
     if location is not None:
         user_info.append(f"거주지: {location}")
-    if income is not None:
+    if income is not None and str(income).strip() != "":
         user_info.append(f"소득: 중위 {income}%")
     if family_size is not None:
         user_info.append(f"가구 형태: {family_size}")
     if marriage is not None:
         user_info.append(f"결혼 유무: {marriage}")
-    if children is not None:
+    if children is not None and children != "해당 없음":
         user_info.append(f"자녀 수: {children}명")
-    if basic_living is not None:
+    if basic_living is not None and basic_living != "해당 없음":
         user_info.append(f"기초생활수급 여부: {basic_living}")
-    if employment_status is not None:
+    if employment_status is not None and employment_status != "해당 없음":
         user_info.append(f"취업 여부: {employment_status}")
+    if pregnancy_status is not None and pregnancy_status != "해당 없음":
+        user_info.append(f"임신/출산 상태: {pregnancy_status}")
+    if nationality is not None and nationality != "해당 없음":
+        user_info.append(f"국적: {nationality}")
+    if disability is not None and disability != "해당 없음":
+        user_info.append(f"장애 유무: {disability}")
+    if military_service is not None and military_service != "해당 없음":
+        user_info.append(f"군 복무 여부: {military_service}")
 
     user_info_str = "\n".join(user_info)
 
-    prompt = f"""한국 복지정책 전문가로서 사용자 정보와 중요 지침과 주어진 검색 결과를 바탕으로 질문에 대해 복지 정책들을 정확하고 이해하기 쉽게 답변해주세요.
+    prompt = f"""한국 복지정책 전문가로서, 아래 사용자 정보와 참고자료, 중요 지침을 참고하여 질문에 대해 알기 쉽고 정확하게 복지 정책을 추천해 주세요.
 
-사용자 정보:
-{user_info_str if user_info_str else "정보 없음"}
+만약 문서에 답이 없거나 불완전하다면, '이 질문에 대한 정보는 부족합니다: [부족한 정보 요약]'이라고 명시해 주세요.
 
-질문: 
+[사용자 질문]:
 {question}
 
-검색 결과:
+[참고자료]:
 {context}
 
-중요 지침:
-1. 정확히 3개 정책만 답변
-2. 각 정책마다 아래 6개 항목을 모두 작성
-3. 마지막에 완전한 문장으로 마무리
+[답변 중요 지침]:
+1. 최대 3개 정책을 추천해 주세요.  
+2. 각 정책마다 아래 6개 항목을 모두 작성해 주세요.  
+3. 답변 마지막은 완전한 문장으로 마무리해 주세요.
 
-필수 형식:
+[필수 형식]:
 ### 정책 [번호]: [정책명]
 - 요약: [요약 내용]
 - 대상: [대상 내용]
@@ -222,7 +297,9 @@ def _process_query(question, age=None, gender=None, location=None, income=None, 
 - 주의: [주의 내용]
 - 문의: [문의 내용]
 
-답변"""
+[정보 부족 시]:  
+이 질문에 대한 정보는 부족합니다: [이유 또는 부족한 부분 요약]
+답변:"""
 
     return prompt, None, sources, search_results
 
@@ -261,7 +338,14 @@ def _extract_answer_only(response):
 def generate_answer(question, age=None, gender=None, location=None, income=None, family_size=None, marriage=None, children=None, basic_living=None, employment_status=None, pregnancy_status=None, nationality=None, disability=None, military_service=None):
     """질문에 대한 답변을 생성합니다 (일반 모드)."""
     try:
-        prompt, error_msg, sources, search_results = _process_query(question, age, gender, location, income, family_size, marriage, children, basic_living, employment_status, pregnancy_status, nationality, disability, military_service)
+        result = _process_query(question, age, gender, location, income, family_size, marriage, children, basic_living, employment_status, pregnancy_status, nationality, disability, military_service)
+        
+        if len(result) == 4:
+            prompt, error_msg, sources, search_results = result
+        else:
+            # 이전 형식 지원 (3개 반환값)
+            prompt, error_msg, sources = result
+            search_results = []
         
         if error_msg:
             return error_msg, [], []
@@ -274,7 +358,6 @@ def generate_answer(question, age=None, gender=None, location=None, income=None,
             
             # 답변에서 프롬프트 제거
             clean_response = _extract_answer_only(response)
-            # clean_response = remove_emojis_and_enclosed_chars(clean_response)
             return clean_response, sources, search_results
             
         except Exception as e:
@@ -287,7 +370,14 @@ def generate_answer(question, age=None, gender=None, location=None, income=None,
 def generate_answer_streaming(question, age=None, gender=None, location=None, income=None, family_size=None, marriage=None, children=None, basic_living=None, employment_status=None, pregnancy_status=None, nationality=None, disability=None, military_service=None):
     """질문에 대한 답변을 생성합니다 (스트리밍 모드)."""
     try:
-        prompt, error_msg, sources, search_results = _process_query(question, age, gender, location, income, family_size, marriage, children, basic_living, employment_status, pregnancy_status, nationality, disability, military_service)
+        result = _process_query(question, age, gender, location, income, family_size, marriage, children, basic_living, employment_status, pregnancy_status, nationality, disability, military_service)
+        
+        if len(result) == 4:
+            prompt, error_msg, sources, search_results = result
+        else:
+            # 이전 형식 지원 (3개 반환값)
+            prompt, error_msg, sources = result
+            search_results = []
         
         if error_msg:
             yield error_msg, [], []
@@ -342,7 +432,53 @@ def on_chat_change():
     st.session_state.chat_box.use_chat_name(st.session_state["chat_name"])
     st.session_state.chat_box.context_to_session()
 
-# 기본 문서 자동 로드 함수
+# 추가 문서 로드 함수
+def load_additional_documents(uploaded_files):
+    """추가 문서를 로드합니다."""
+    pdf_dir = "./pdf/welfare"
+    
+    with st.spinner("추가 문서를 처리하고 있습니다..."):
+        try:
+            # 업로드된 파일 저장
+            additional_files = []
+            for uploaded_file in uploaded_files:
+                with open(uploaded_file.name, "wb") as f:
+                    f.write(uploaded_file.getvalue())
+                additional_files.append(uploaded_file.name)
+            
+            # 기본 문서와 추가 문서 합치기
+            all_files = []
+            
+            # 기본 문서 추가
+            if os.path.exists(pdf_dir):
+                pdf_files = [os.path.join(pdf_dir, f) for f in os.listdir(pdf_dir) if f.lower().endswith(".pdf")]
+                all_files.extend(pdf_files)
+            
+            # 추가 문서 추가
+            all_files.extend(additional_files)
+            
+            st.info(f"기본 문서 포함 총 {len(all_files)}개 파일을 처리합니다...")
+
+            # MultiVectorRetriever 방식으로 문서 로드 및 처리
+            result = load_and_process_documents(all_files, st.session_state.embedding_model)
+            
+            if result[0] is not None:  # retriever가 성공적으로 생성되었는지 확인
+                retriever, total_chunks, processed_docs = result
+                st.session_state.retriever = retriever
+                st.session_state.processed_docs = processed_docs
+                
+                st.success(f"✅ 추가 문서 포함 총 {total_chunks}개 문서 청크가 성공적으로 로드되었습니다!")
+                st.session_state.documents_loaded = True
+                return True
+            else:
+                st.error("추가 문서 로드에 실패했습니다.")
+                return False
+                
+        except Exception as e:
+            st.error(f"추가 문서 처리 중 오류 발생: {str(e)}")
+            return False
+
+# 기본 문서 자동 로드 함수 (MultiVectorRetriever 방식으로 수정)
 def load_default_documents():
     """페이지 시작 시 기본 복지 문서를 자동으로 로드합니다."""
     if st.session_state.get("default_documents_loaded", False):
@@ -356,17 +492,17 @@ def load_default_documents():
         if pdf_files:
             try:
                 with st.spinner("기본 복지 문서를 로드하고 있습니다..."):
-                    # 문서 로드 및 처리
-                    texts = load_and_process_documents(pdf_files)
+                    # 임베딩 모델 로드
+                    if "embedding_model" not in st.session_state:
+                        st.session_state.embedding_model = load_embedding_model()
                     
-                    if texts:
-                        # 임베딩 모델 로드
-                        if "embedding_model" not in st.session_state:
-                            st.session_state.embedding_model = load_embedding_model()
-                        
-                        # 벡터스토어 생성
-                        db = create_vectorstore(texts, st.session_state.embedding_model)
-                        st.session_state.db = db
+                    # MultiVectorRetriever 방식으로 문서 로드 및 처리
+                    result = load_and_process_documents(pdf_files, st.session_state.embedding_model)
+                    
+                    if result[0] is not None:  # retriever가 성공적으로 생성되었는지 확인
+                        retriever, total_chunks, processed_docs = result
+                        st.session_state.retriever = retriever
+                        st.session_state.processed_docs = processed_docs
                         
                         # LLM 모델 로드
                         if "llm" not in st.session_state:
@@ -374,7 +510,7 @@ def load_default_documents():
                         
                         st.session_state.default_documents_loaded = True
                         st.session_state.documents_loaded = True
-                        st.success(f"✅ 기본 복지 문서 {len(texts)}개 청크가 로드되었습니다!")
+                        st.success(f"✅ 기본 복지 문서 {total_chunks}개 청크가 로드되었습니다!")
                         
             except Exception as e:
                 st.error(f"기본 문서 로드 중 오류 발생: {str(e)}")
@@ -424,26 +560,26 @@ def main():
         st.subheader("사용자 정보")
         age = st.text_input("나이", value="", placeholder="나이를 입력하세요")
         gender = st.radio("성별", options=["남", "여"], index=0)
-        family_size = ["1인 가구", "한부모가족", "다자녀가정"]
+        family_size = ["해당 없음", "1인 가구", "한부모가족", "다자녀가정"]
         family_size = st.selectbox("가구 형태", options=family_size, index=0)
         
         # 결혼 유무 입력
-        marriage = ["미혼", "기혼", "이혼"]
+        marriage = ["해당 없음", "기혼"]
         marriage = st.selectbox("결혼 유무", options=marriage, index=0)
         
         # 국적 입력
-        nationality = ["내국인", "외국인", "재외국민", "난민"]
+        nationality = ["해당 없음", "외국인", "재외국민", "난민"]
         nationality = st.selectbox("국적", options=nationality, index=0)
         
         # 장애 유무 입력
-        disability = st.radio("장애 유무", options=["없음", "있음"], index=0)
+        disability = st.radio("장애 유무", options=["해당 없음", "있음"], index=0)
         
         # 병역 유무 입력
-        military_service = ["군필", "복무 중", "미필"]
+        military_service = ["해당 없음", "군필", "복무 중"]
         military_service = st.selectbox("병역 유무", options=military_service, index=0)
         
         # 취업 여부 (실직자/구직자/재직자)
-        employment_status = ["재직자", "구직자", "실직자"]
+        employment_status = ["해당 없음", "재직자", "실직자"]
         employment_status = st.selectbox("취업 여부", options=employment_status, index=0)
         
         # 임신/출산 상태 (임산부, 출산 후 6개월 이내, 해당 없음)
@@ -451,7 +587,7 @@ def main():
         pregnancy_status = st.selectbox("임신/출산", options=pregnancy_status, index=0)
         
         # 자녀 수 선택
-        children_options = ["0명", "1명", "2명", "3명", "4명", "5명", "6명", "7명", "8명", "9명", "10명"]
+        children_options = ["해당 없음", "1명", "2명", "3명", "4명", "5명", "6명", "7명", "8명", "9명", "10명"]
         children = st.selectbox("자녀 수", options=children_options, index=0)
 
         # 거주지
@@ -463,7 +599,7 @@ def main():
         income = st.slider("소득 (중위 %)", min_value=10, max_value=90, value=50, step=1)
         
         # 기초생활수급 여부 (수급자/비수급자)
-        basic_living = st.radio("기초생활수급 여부", options=["비수급자", "수급자"], index=0)
+        basic_living = st.radio("기초생활수급 여부", options=["해당 없음", "수급자"], index=0)
         
         st.divider()
         
@@ -500,47 +636,12 @@ def main():
         
         # 추가 문서 로드 버튼
         if st.button("추가 문서 로드", type="secondary"):
-            with st.spinner("추가 문서를 처리하고 있습니다..."):
-                try:
-                    # 업로드된 파일 저장
-                    additional_files = []
-                    for uploaded_file in uploaded_files:
-                        with open(uploaded_file.name, "wb") as f:
-                            f.write(uploaded_file.getvalue())
-                        additional_files.append(uploaded_file.name)
-                    
-                    # 기본 문서와 추가 문서 합치기
-                    all_files = []
-                    
-                    # 기본 문서 추가
-                    if os.path.exists(pdf_dir):
-                        pdf_files = [os.path.join(pdf_dir, f) for f in os.listdir(pdf_dir) if f.lower().endswith(".pdf")]
-                        all_files.extend(pdf_files)
-                    
-                    # 추가 문서 추가
-                    all_files.extend(additional_files)
-                    
-                    st.info(f"기본 문서 포함 총 {len(all_files)}개 파일을 처리합니다...")
-
-                    # 문서 로드 및 처리
-                    texts = load_and_process_documents(all_files)
-                    
-                    if texts:
-                        # 벡터스토어 재생성
-                        try:
-                            db = create_vectorstore(texts, st.session_state.embedding_model)
-                            st.session_state.db = db
-                        except Exception as e:
-                            st.error(f"벡터스토어 생성 실패: {str(e)}")
-                            return
-                        
-                        st.success(f"✅ 추가 문서 포함 총 {len(texts)}개 문서 청크가 성공적으로 로드되었습니다!")
-                        st.session_state.documents_loaded = True
-                    else:
-                        st.error("추가 문서 로드에 실패했습니다.")
-                        
-                except Exception as e:
-                    st.error(f"추가 문서 처리 중 오류 발생: {str(e)}")
+            if uploaded_files:
+                success = load_additional_documents(uploaded_files)
+                if success:
+                    st.rerun()
+            else:
+                st.warning("업로드할 파일을 선택해주세요.")
         
         st.divider()
         
