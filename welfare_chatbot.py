@@ -196,7 +196,7 @@ def load_and_process_documents(file_paths: List[str], embedding_model):
             preprocess_func=kiwi_tokenize
         )
         
-        kiwi_bm25.k = 3
+        kiwi_bm25.k = 1
         
         vectorstore = FAISS.from_documents(
             processed_data,
@@ -241,7 +241,7 @@ def load_llm_model():
         tokenizer=tokenizer,
         model_kwargs={"torch_dtype": torch.bfloat16},
         device_map="auto",
-        max_new_tokens=512,
+        max_new_tokens=768,
         temperature=1.0,  # 의미 없음, 제거 가능
         do_sample=False,  # 확률적 출력 제거
         early_stopping=True,
@@ -330,6 +330,7 @@ def _process_query(question, chat_name):
 1. 현재 제공 가능한 정보를 먼저 알려주세요.
 2. 부족한 정보에 대해 "추가로 다음 정보가 필요합니다:" 형태로 명시해 주세요.
 3. 사용자가 어떤 정보를 더 제공하면 도움이 될지 구체적으로 안내해 주세요.
+4. 각 항목은 200자 이내, 전체 정책 설명은 1개당 800자 이내로 작성해 주세요.
 
 [사용자 질문]:
 {question}
