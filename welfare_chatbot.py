@@ -235,6 +235,7 @@ def load_llm_model():
     """LLM 모델을 로드하여 반환합니다."""
     model_name = "MLP-KTLim/llama-3-Korean-Bllossom-8B"
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    # LLM 파이프라인을 생성합니다 (assistant 지시에 따라)
     llm_pipeline = pipeline(
         "text-generation",
         model=model_name,
@@ -242,11 +243,10 @@ def load_llm_model():
         model_kwargs={"torch_dtype": torch.bfloat16},
         device_map="auto",
         max_new_tokens=768,
-        temperature=1.0,  # 의미 없음, 제거 가능
-        do_sample=False,  # 확률적 출력 제거
+        do_sample=False, 
         early_stopping=True,
         pad_token_id=tokenizer.eos_token_id,
-        num_beams=4,  # 빔 서치로 정확도 향상
+        num_beams=4
     )
 
     llm = HuggingFacePipeline(pipeline=llm_pipeline)
@@ -265,7 +265,7 @@ def _process_query(question, chat_name):
 
     # EnsembleRetriever 사용 (설정된 k 값에 따라 검색)
     try:
-        docs = st.session_state.retriever.invoke(question, k=3)
+        docs = st.session_state.retriever.invoke(question)
     except Exception as e:
         return None, f"문서 검색 중 오류 발생: {str(e)}", [], []
 
@@ -330,7 +330,6 @@ def _process_query(question, chat_name):
 1. 현재 제공 가능한 정보를 먼저 알려주세요.
 2. 부족한 정보에 대해 "추가로 다음 정보가 필요합니다:" 형태로 명시해 주세요.
 3. 사용자가 어떤 정보를 더 제공하면 도움이 될지 구체적으로 안내해 주세요.
-4. 각 항목은 200자 이내, 전체 정책 설명은 1개당 800자 이내로 작성해 주세요.
 
 [사용자 질문]:
 {question}
@@ -341,7 +340,7 @@ def _process_query(question, chat_name):
 [답변 중요 지침]:
 1. 최대 3개 정책을 추천해 주세요.  
 2. 각 정책마다 아래 6개 항목을 모두 작성해 주세요.  
-3. 답변 마지막은 완전한 문장으로 마무리해 주세요.
+3. 각 항목은 200자 이내, 전체 설명은 800자 이내로 작성해 주세요.
 4. 정보가 부족한 경우, 어떤 개인정보나 상황 정보가 추가로 필요한지 구체적으로 안내해 주세요.
 
 [필수 형식]:
@@ -386,34 +385,44 @@ def _process_query(question, chat_name):
 
 # 답변에서 프롬프트 제거 함수
 def _extract_answer_only(response):
-    """LLM 응답에서 답변 부분만 추출합니다."""
+    """LLM 응답에서 답변 부분만 추출합니다"""
     if not response:
         return response
-    
+
     # "답변" 키워드 이후의 내용만 추출
     answer_markers = ["답변:", "답변", "Answer:", "Answer"]
-    
+
     for marker in answer_markers:
         if marker in response:
             parts = response.split(marker, 1)
             if len(parts) > 1:
-                return parts[1].strip()
-    
-    # 답변 마커가 없으면 ### 정책으로 시작하는 부분부터 추출
-    lines = response.split('\n')
-    answer_lines = []
-    start_found = False
-    
-    for line in lines:
-        if line.strip().startswith('### 정책: '):
-            start_found = True
-        if start_found:
-            answer_lines.append(line)
-    
-    if answer_lines:
-        return '\n'.join(answer_lines)
-    
-    return response
+                answer = parts[1].strip()
+                break
+    else:
+        # 답변 마커가 없으면 ### 정책으로 시작하는 부분부터 추출
+        lines = response.split('\n')
+        answer_lines = []
+        start_found = False
+
+        for line in lines:
+            if line.strip().startswith('### 정책: '):
+                start_found = True
+            if start_found:
+                answer_lines.append(line)
+
+        if answer_lines:
+            answer = '\n'.join(answer_lines)
+        else:
+            answer = response
+
+    # 후처리(임시)
+    thank_you_markers = ["감사합니다.", "감사합니다", "Thank you.", "Thank you"]
+    for marker in thank_you_markers:
+        if marker in answer:
+            answer = answer.split(marker, 1)[0].strip()
+            break
+
+    return answer
 
 # 스트리밍 모드 답변 생성 함수
 def generate_answer_streaming(question, chat_name):
@@ -564,7 +573,7 @@ def load_default_documents():
 # 메인 앱
 def main():
     st.set_page_config(
-        page_title="복지PT",
+        page_title="생애주기별 개인 맞춤형 복지 추천 AI 에이전트",
         page_icon="🏛️",
         layout="wide"
     )
@@ -652,12 +661,7 @@ def main():
         
         st.divider()
         
-        # 설정 옵션
-        show_history = st.checkbox('세션 상태 보기', key="show_history")
-        
         chat_box.context_from_session(exclude=["current_chat"])
-        
-        st.divider()
         
         # 문서 상태 표시
         st.subheader("문서 상태")
@@ -705,7 +709,7 @@ def main():
     # 멋진 첫 화면 문구와 폰트 크기 조정
     st.markdown(
         """
-        <h1 style='text-align: center; font-size: 3.2em;'>복지PT에 오신 것을 환영합니다!</h1>
+        <h1 style='text-align: center; font-size: 3.2em;'>생애주기별 개인 맞춤형 복지 추천 AI 에이전트</h1>
         <p style='text-align: center; font-size: 1.5em; color: #555;'>
             당신의 상황에 꼭 맞는 복지 정책을 <b>AI</b>가 쉽고 빠르게 찾아드립니다.<br>
             궁금한 점을 자유롭게 입력해보세요!
@@ -760,7 +764,6 @@ def main():
             right: 0 !important;
             background: rgba(255, 255, 255, 0.98) !important;
             backdrop-filter: blur(15px) !important;
-            padding: 20px !important;
             border-top: 2px solid #e6e6e6 !important;
             box-shadow: 0 -4px 20px rgba(0,0,0,0.15) !important;
             z-index: 9999 !important;
@@ -779,12 +782,12 @@ def main():
             }
         }
         
-        /* 마이크 버튼 스타일 */
+        /* 마이크 버튼 스타일 
         .mic-button {
             display: flex !important;
             align-items: center !important;
             height: 100% !important;
-        }
+        }*/
         
         /* 채팅 입력창 스타일 개선 */
         .stChatInput > div {
@@ -805,34 +808,39 @@ def main():
         unsafe_allow_html=True
     )
     
-    # 하단 고정 입력 영역
-    st.markdown('<div class="fixed-bottom">', unsafe_allow_html=True)
-    
-    # 채팅 입력 UI - 마이크 버튼 추가 (하단 고정)
-    col1, col2 = st.columns([10, 1])
-    
+    col1, col2 = st.columns([8, 1])
+
     with col1:
-        # 첫 번째 질문인지 확인하여 플레이스홀더 메시지 변경
         current_chat = st.session_state.current_chat
         history = get_conversation_history(current_chat)
         is_first_question = len(history) == 0 and len(st.session_state.chat_box.history) == 0
-        
+
         if is_first_question:
             placeholder_text = "복지 정책에 대해 질문해주세요. (예: 30대 신혼부부 주거 지원 정책)"
         else:
             placeholder_text = "추가 질문이나 더 자세한 정보가 필요하시면 입력해주세요."
-        
+
+        st.markdown(
+            """
+            <div style="height: 48px; display: flex; align-items: center;">
+            """,
+            unsafe_allow_html=True
+        )
         query = st.chat_input(placeholder_text)
-    
+        st.markdown("</div>", unsafe_allow_html=True)
+
     with col2:
-        st.markdown('<div class="mic-button">', unsafe_allow_html=True)
+        st.markdown(
+            """
+            <div class="mic-button" style="height: 48px; display: flex; align-items: center; justify-content: center;">
+            """,
+            unsafe_allow_html=True
+        )
         # 마이크 버튼 (기능 없음, 시각적 효과만)
         if st.button("🎤", key="mic_button", type="secondary" if not st.session_state.mic_active else "primary"):
             st.session_state.mic_active = not st.session_state.mic_active
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
         
     # 채팅 입력 처리
     if query:
@@ -916,23 +924,7 @@ def main():
                 f"스트리밍 모드 오류: {str(e)}",
                 "📄 참고자료: 없음",
             ])
-    
-    # 세션 상태 보기
-    if show_history:
-        st.subheader("세션 상태")
-        st.write(f"현재 채팅: {st.session_state.current_chat}")
-        st.write(f"마이크 상태: {'활성화' if st.session_state.mic_active else '비활성화'}")
-        st.write(f"채팅 목록: {get_chat_list()}")
-        
-        # 대화 기록 표시
-        st.write("대화 기록:")
-        history = get_conversation_history(st.session_state.current_chat)
-        for i, conv in enumerate(history, 1):
-            st.write(f"{i}. Q: {conv['question'][:50]}...")
-            st.write(f"   A: {conv['answer'][:100]}...")
-        
-        with st.expander("전체 세션 상태 보기"):
-            st.write(st.session_state)
+
 
 if __name__ == "__main__":
     main() 
