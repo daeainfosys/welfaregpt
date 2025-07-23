@@ -70,6 +70,7 @@ dependencies:
   - debugpy=1.8.11=py312h6a678d5_0
   - decorator=5.2.1=pyhd8ed1ab_0
   - deepdiff=7.0.1=py312he106c6f_0
+  - deprecated=1.2.18=pyhd8ed1ab_0
   - dill=0.3.8=py312h06a4308_0
   - distro=1.9.0=py312h06a4308_0
   - dnspython=2.4.2=py312h06a4308_0
@@ -290,6 +291,7 @@ dependencies:
   - pydantic-settings=2.6.1=py312h06a4308_0
   - pygments=2.19.2=pyhd8ed1ab_0
   - pyopenssl=25.1.0=pyhd8ed1ab_0
+  - pypdf=5.8.0=pyhe01879c_0
   - pypika=0.48.9=pyhd8ed1ab_1
   - pyproject_hooks=1.0.0=py312h06a4308_0
   - pysocks=1.7.1=py312h06a4308_0
@@ -404,10 +406,13 @@ dependencies:
       - certifi==2025.7.14
       - colorama==0.4.6
       - defusedxml==0.7.1
-      - deprecated==1.2.18
       - dirtyjson==1.0.8
+      - docopt-ng==0.9.0
+      - faiss-cpu==1.11.0.post1
       - griffe==1.7.3
       - jiter==0.10.0
+      - kiwipiepy==0.21.0
+      - kiwipiepy-model==0.21.0
       - langchain==0.3.26
       - langchain-community==0.3.27
       - langchain-core==0.3.69
@@ -435,11 +440,11 @@ dependencies:
       - pycryptodome==3.23.0
       - pymupdf==1.26.3
       - pymupdf4llm==0.0.26
-      - pypdf==5.8.0
+      - rank-bm25==0.2.2
       - simplejson==3.20.1
       - streamlit-chatbox==1.1.13.post1
       - streamlit-feedback==0.1.4
       - streamlit-markdown==1.1.0
       - striprtf==0.0.26
       - tiktoken==0.9.0
-prefix: /anaconda3/envs/rag
+prefix: /anaconda3/envs/rag2
