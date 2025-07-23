@@ -64,9 +64,7 @@
 4. 답변에 대한 피드백(좋아요/싫어요 및 의견)을 남길 수 있습니다.
 
 
-
-https://github.com/user-attachments/assets/2fd1ddea-0338-41d6-9247-1aff0edfd6b8
-
+https://github.com/user-attachments/assets/0635d209-9e9a-4426-b992-1114104b6b84
 
 
 ---
