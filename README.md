@@ -63,7 +63,10 @@
 3. 추가로 궁금한 점이 있으면 이어서 질문할 수 있으며, 이전 대화 이력이 자동으로 반영됩니다.
 4. 답변에 대한 피드백(좋아요/싫어요 및 의견)을 남길 수 있습니다.
 
-https://github.com/user-attachments/assets/8be550c0-6c79-4f3c-afe0-1dd3a67c92d1
+
+
+https://github.com/user-attachments/assets/2fd1ddea-0338-41d6-9247-1aff0edfd6b8
+
 
 
 ---
